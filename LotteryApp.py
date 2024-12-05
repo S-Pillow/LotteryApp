@@ -1,106 +1,135 @@
-from selenium import webdriver
-from selenium.webdriver.common.by import By
-from selenium.webdriver.edge.service import Service
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-import os
+import sys
+from PyQt6.QtWidgets import (
+    QApplication, QMainWindow, QVBoxLayout, QPushButton, QTextEdit, QWidget, QLabel
+)
+from PyQt6.QtCore import QTimer
 import csv
+from collections import Counter
+import os
+import random  # Simulating lottery data for testing
 
 
-def fetch_all_lottery_numbers():
-    """
-    Fetch all winning numbers displayed on the page.
-    """
-    url = "https://www.kylottery.com/apps/draw_games/pastwinning.html?game=12"
-    try:
-        # Initialize Edge WebDriver
-        print("Initializing Edge WebDriver...")
-        service = Service(r"C:\Users\spill\Downloads\edgedriver_win64\msedgedriver.exe")  # Update the path to your WebDriver
-        driver = webdriver.Edge(service=service)
+class LotteryApp(QMainWindow):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("Lottery Analyzer")
+        self.setGeometry(100, 100, 600, 400)
 
-        # Open the lottery website
-        print(f"Opening URL: {url}")
-        driver.get(url)
+        # Main widget and layout
+        self.central_widget = QWidget()
+        self.setCentralWidget(self.central_widget)
+        self.layout = QVBoxLayout(self.central_widget)
 
-        # Wait for the page to load
-        print("Waiting for the numbers to load...")
-        WebDriverWait(driver, 10).until(
-            EC.presence_of_all_elements_located((By.CLASS_NAME, "klc-pb-past-winning-display-cell"))
+        # Buttons
+        self.fetch_button = QPushButton("Fetch Lottery Data")
+        self.analyze_button = QPushButton("Analyze Data")
+        self.save_button = QPushButton("Save Data")
+        self.layout.addWidget(self.fetch_button)
+        self.layout.addWidget(self.analyze_button)
+        self.layout.addWidget(self.save_button)
+
+        # Output Area
+        self.output_label = QLabel("Output:")
+        self.output_text = QTextEdit()
+        self.output_text.setReadOnly(True)
+        self.layout.addWidget(self.output_label)
+        self.layout.addWidget(self.output_text)
+
+        # Connect buttons to functions
+        self.fetch_button.clicked.connect(self.fetch_data)
+        self.analyze_button.clicked.connect(self.analyze_data)
+        self.save_button.clicked.connect(self.save_data)
+
+        # Timer for automation (optional)
+        self.timer = QTimer()
+        self.timer.timeout.connect(self.fetch_data)  # Fetch data periodically
+
+    def fetch_data(self):
+        """Simulates fetching lottery data."""
+        self.lottery_data = [
+            [random.randint(1, 69) for _ in range(5)] + [random.randint(1, 26)]
+            for _ in range(10)
+        ]  # Simulating 10 draws
+        self.output_text.append("Lottery data fetched successfully!")
+
+    def analyze_data(self):
+        """Analyzes the lottery data."""
+        if not hasattr(self, "lottery_data"):
+            self.output_text.append("No data to analyze. Fetch data first.")
+            return
+
+        all_numbers = []
+        special_numbers = []
+
+        # Flatten the data for analysis
+        for draw in self.lottery_data:
+            all_numbers.extend(draw[:-1])
+            special_numbers.append(draw[-1])
+
+        # Count occurrences
+        number_counts = Counter(all_numbers)
+        special_counts = Counter(special_numbers)
+
+        # Find the least frequent numbers
+        cold_numbers = number_counts.most_common()[-5:]
+        hottest_special = special_counts.most_common(1)
+
+        # Number distribution by range
+        ranges = {f"{i}-{i + 9}": 0 for i in range(1, 70, 10)}
+        for number in all_numbers:
+            for range_key in ranges.keys():
+                low, high = map(int, range_key.split("-"))
+                if low <= number <= high:
+                    ranges[range_key] += 1
+
+        # Find consecutive numbers
+        consecutive_draws = [
+            draw for draw in self.lottery_data if self.has_consecutive_numbers(draw)
+        ]
+
+        # Display results
+        self.output_text.append("=== Analysis Results ===")
+        self.output_text.append(f"Cold Numbers: {cold_numbers}")
+        self.output_text.append(f"Hottest Powerball: {hottest_special}")
+        self.output_text.append(f"Number Distribution by Range: {ranges}")
+        self.output_text.append(
+            f"Draws with Consecutive Numbers: {len(consecutive_draws)}"
         )
 
-        # Locate all elements containing winning numbers
-        print("Locating all winning number rows...")
-        all_winning_cells = driver.find_elements(By.CLASS_NAME, "klc-pb-past-winning-display-cell")
+    def save_data(self):
+        """Saves the lottery data to a CSV file."""
+        if not hasattr(self, "lottery_data"):
+            self.output_text.append("No data to save. Fetch data first.")
+            return
 
-        # Extract numbers for each drawing
-        all_drawings = []
-        for cell in all_winning_cells:
-            # Find all number balls within this cell
-            number_balls = cell.find_elements(By.CLASS_NAME, "number-ball")
-
-            # Extract numbers
-            winning_numbers = [int(ball.text.strip()) for ball in number_balls[:-1]]
-            powerball_number = int(number_balls[-1].text.strip())
-
-            # Save the drawing as a tuple
-            all_drawings.append(winning_numbers + [powerball_number])
-
-        # Close the browser
-        driver.quit()
-        print(f"Fetched {len(all_drawings)} drawings successfully!")
-        return all_drawings
-    except Exception as e:
-        print(f"Error fetching data: {e}")
-        return []
-
-
-def save_drawings_to_csv(drawings):
-    """
-    Save all lottery drawings to a CSV file, with a confirmation prompt if the file already exists.
-    """
-    filename = "lottery_data.csv"
-    try:
-        # Check if the file exists
+        filename = "lottery_data.csv"
         if os.path.exists(filename):
-            overwrite = input(f"The file '{filename}' already exists. Overwrite? (y/n): ").strip().lower()
-            if overwrite != 'y':
-                print("File not overwritten. Operation canceled.")
+            overwrite = input(
+                f"The file '{filename}' already exists. Overwrite? (y/n): "
+            ).strip()
+            if overwrite.lower() != "y":
+                self.output_text.append("File not saved. Operation canceled.")
                 return
 
-        print(f"Saving {len(drawings)} drawings to CSV...")
         with open(filename, "w", newline="") as csvfile:
             writer = csv.writer(csvfile)
-            writer.writerow(["Number 1", "Number 2", "Number 3", "Number 4", "Number 5", "Powerball"])  # Header
-            writer.writerows(drawings)
-        print(f"{len(drawings)} drawings saved successfully!")
-    except Exception as e:
-        print(f"Error saving to CSV: {e}")
+            writer.writerow(["Number 1", "Number 2", "Number 3", "Number 4", "Number 5", "Powerball"])
+            writer.writerows(self.lottery_data)
 
+        self.output_text.append("Data saved to 'lottery_data.csv'.")
 
-def main():
-    """
-    Main menu for the lottery app.
-    """
-    while True:
-        print("\nLottery App Menu:")
-        print("1. Fetch and Save All Numbers")
-        print("2. Exit")
-        choice = input("Choose an option: ")
-
-        if choice == "1":
-            print("Fetching all lottery numbers...")
-            all_drawings = fetch_all_lottery_numbers()
-            if all_drawings:
-                print(f"Fetched {len(all_drawings)} drawings.")
-                save_drawings_to_csv(all_drawings)
-            else:
-                print("Failed to fetch lottery numbers. Check logs for details.")
-        elif choice == "2":
-            print("Goodbye!")
-            break
-        else:
-            print("Invalid choice. Please try again.")
+    @staticmethod
+    def has_consecutive_numbers(draw):
+        """Checks if a draw contains consecutive numbers."""
+        numbers = sorted(draw[:-1])  # Exclude the Powerball number
+        for i in range(len(numbers) - 1):
+            if numbers[i] + 1 == numbers[i + 1]:
+                return True
+        return False
 
 
 if __name__ == "__main__":
-    main()
+    app = QApplication(sys.argv)
+    window = LotteryApp()
+    window.show()
+    sys.exit(app.exec())
