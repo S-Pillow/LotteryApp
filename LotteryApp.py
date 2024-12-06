@@ -7,6 +7,8 @@ from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.edge.service import Service
 from datetime import datetime
+from collections import Counter
+import random
 
 
 class LotteryApp(QMainWindow):
@@ -24,6 +26,9 @@ class LotteryApp(QMainWindow):
         self.fetch_button = QPushButton("Fetch Lottery Data")
         self.fetch_all_checkbox = QCheckBox("Fetch All Historical Data")
         self.filter_button = QPushButton("Filter Results")
+        self.analyze_button = QPushButton("Analyze Numbers")
+        self.pick_winners_button = QPushButton("Pick Winners")
+        self.clear_output_button = QPushButton("Clear Output")
         self.date_range_label = QLabel("Filter by Date Range:")
         self.start_calendar = QCalendarWidget()
         self.end_calendar = QCalendarWidget()
@@ -35,6 +40,9 @@ class LotteryApp(QMainWindow):
         self.layout.addWidget(self.fetch_button)
         self.layout.addWidget(self.fetch_all_checkbox)
         self.layout.addWidget(self.filter_button)
+        self.layout.addWidget(self.analyze_button)
+        self.layout.addWidget(self.pick_winners_button)
+        self.layout.addWidget(self.clear_output_button)
         self.layout.addWidget(self.date_range_label)
 
         date_layout = QHBoxLayout()
@@ -50,6 +58,9 @@ class LotteryApp(QMainWindow):
         # Connect buttons
         self.fetch_button.clicked.connect(self.fetch_data)
         self.filter_button.clicked.connect(self.filter_results)
+        self.analyze_button.clicked.connect(self.analyze_numbers)
+        self.pick_winners_button.clicked.connect(self.pick_winners)
+        self.clear_output_button.clicked.connect(self.clear_output)
 
         # Initialize SQLite database
         self.init_db()
@@ -61,7 +72,7 @@ class LotteryApp(QMainWindow):
         self.cursor.execute("""
             CREATE TABLE IF NOT EXISTS draws (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                draw_date TEXT,
+                draw_date TEXT UNIQUE,
                 number_1 INTEGER,
                 number_2 INTEGER,
                 number_3 INTEGER,
@@ -72,6 +83,15 @@ class LotteryApp(QMainWindow):
         """)
         self.conn.commit()
 
+    def clear_output(self):
+        """Clear the output text."""
+        self.output_text.clear()
+
+    def is_powerball_day(self, date_string):
+        """Check if a date is a Monday, Wednesday, or Saturday."""
+        draw_date = datetime.strptime(date_string, "%Y-%m-%d")
+        return draw_date.weekday() in [0, 2, 5]  # Monday=0, Wednesday=2, Saturday=5
+
     def fetch_data(self):
         """Fetch real lottery data using Selenium."""
         url = "https://www.kylottery.com/apps/draw_games/pastwinning.html?game=12"
@@ -80,7 +100,7 @@ class LotteryApp(QMainWindow):
 
         try:
             # Set up Selenium WebDriver
-            service = Service(r"C:\Users\spill\Downloads\edgedriver_win64\msedgedriver.exe")  # Update with your path
+            service = Service(r"C:\Users\spill\Downloads\edgedriver_win64\msedgedriver.exe")
             driver = webdriver.Edge(service=service)
             driver.get(url)
 
@@ -103,13 +123,23 @@ class LotteryApp(QMainWindow):
                 raw_date = date_element.text.strip()
                 draw_date = datetime.strptime(raw_date, "%m/%d/%Y").strftime("%Y-%m-%d")  # Convert to YYYY-MM-DD format
 
+                # Filter out non-drawing days
+                if not self.is_powerball_day(draw_date):
+                    continue
+
                 # Parse the numbers
                 ball_elements = row_element.find_elements(By.CLASS_NAME, "number-ball")
                 balls = [int(ball.text.strip()) for ball in ball_elements]
                 numbers, powerball = balls[:-1], balls[-1]
 
-                # Debugging: Print parsed data
-                print(f"Date: {draw_date}, Numbers: {numbers}, Powerball: {powerball}")
+                # Check for duplicates
+                self.cursor.execute("""
+                    SELECT COUNT(*)
+                    FROM draws
+                    WHERE draw_date = ? AND number_1 = ? AND number_2 = ? AND number_3 = ? AND number_4 = ? AND number_5 = ? AND powerball = ?
+                """, (draw_date, *numbers, powerball))
+                if self.cursor.fetchone()[0] > 0:
+                    continue
 
                 # Insert into the database
                 self.cursor.execute("""
@@ -122,33 +152,128 @@ class LotteryApp(QMainWindow):
                     break
 
             self.conn.commit()
-            self.output_text.append(f"Fetched {fetched_count} draw(s) successfully!")
+            self.output_text.append(f"Fetched {fetched_count} draw(s) successfully!<br><br>")
             driver.quit()
         except Exception as e:
-            self.output_text.append(f"Error fetching data: {e}")
+            self.output_text.append(f"Error fetching data: {e}<br><br>")
 
     def filter_results(self):
         """Filters lottery data based on selected date range."""
         start_date = self.start_calendar.selectedDate().toString("yyyy-MM-dd")
         end_date = self.end_calendar.selectedDate().toString("yyyy-MM-dd")
 
-        query = "SELECT * FROM draws WHERE draw_date BETWEEN ? AND ?"
+        query = "SELECT * FROM draws WHERE draw_date BETWEEN ? AND ? ORDER BY draw_date DESC"
         params = [start_date, end_date]
 
         self.cursor.execute(query, params)
         results = self.cursor.fetchall()
 
         if results:
-            self.output_text.append(f"=== Filtered Results ({start_date} to {end_date}) ===")
+            self.output_text.append(f'<span style="color: white;">=== Filtered Results ({start_date} to {end_date}) ===</span><br><br>')
             for result in results:
-                # Format the date back to MM/DD/YYYY for display
                 formatted_date = datetime.strptime(result[1], "%Y-%m-%d").strftime("%m/%d/%Y")
-                self.output_text.append(f"Date: {formatted_date}, Numbers: {result[2:7]}, Powerball: {result[7]}")
+                formatted_numbers = (
+                    f'<span style="color: white;">Date: {formatted_date}, Numbers: </span>'
+                    f'<span style="color: green;">{result[2:7]}</span>, '
+                    f'<span style="color: white;">Powerball: </span>'
+                    f'<span style="color: green;">{result[7]}</span>'
+                )
+                self.output_text.insertHtml(formatted_numbers + "<br><br>")
         else:
-            self.output_text.append("No results found for the given date range.")
+            self.output_text.append('<span style="color: white;">No results found for the given date range.</span><br><br>')
+
+        self.output_text.append("<br><br>")
+
+    def analyze_numbers(self):
+        """Analyze most and least frequent numbers."""
+        self.cursor.execute("SELECT number_1, number_2, number_3, number_4, number_5, powerball FROM draws")
+        data = self.cursor.fetchall()
+
+        white_balls = []
+        powerballs = []
+
+        for row in data:
+            white_balls.extend(row[:5])
+            powerballs.append(row[5])
+
+        white_counts = Counter(white_balls)
+        powerball_counts = Counter(powerballs)
+
+        most_common_white = white_counts.most_common(5)
+        least_common_white = white_counts.most_common()[:-6:-1]
+        most_common_power = powerball_counts.most_common(1)
+        least_common_power = powerball_counts.most_common()[:-2:-1]
+
+        self.output_text.append("=== Most Frequent Numbers ===<br>")
+        self.output_text.append("White Balls (Number (Green), Frequency (Red)):<br><br>")
+        for num, freq in most_common_white:
+            line = f'<span style="color: green;">{num}</span>: <span style="color: red;">{freq} times</span>'
+            self.output_text.insertHtml(line + "<br>")
+
+        self.output_text.append("<br>Powerball (Number (Green), Frequency (Red)):<br><br>")
+        for num, freq in most_common_power:
+            line = f'<span style="color: green;">{num}</span>: <span style="color: red;">{freq} times</span>'
+            self.output_text.insertHtml(line + "<br>")
+
+        self.output_text.append("<br>=== Least Frequent Numbers ===<br>")
+        self.output_text.append("White Balls (Number (Green), Frequency (Red)):<br><br>")
+        for num, freq in least_common_white:
+            line = f'<span style="color: green;">{num}</span>: <span style="color: red;">{freq} times</span>'
+            self.output_text.insertHtml(line + "<br>")
+
+        self.output_text.append("<br>Powerball (Number (Green), Frequency (Red)):<br><br>")
+        for num, freq in least_common_power:
+            line = f'<span style="color: green;">{num}</span>: <span style="color: red;">{freq} times</span>'
+            self.output_text.insertHtml(line + "<br>")
+
+    def pick_winners(self):
+        """Generate most likely, least likely, and random sets of numbers."""
+        self.cursor.execute("SELECT number_1, number_2, number_3, number_4, number_5, powerball FROM draws")
+        data = self.cursor.fetchall()
+
+        white_balls = []
+        powerballs = []
+
+        for row in data:
+            white_balls.extend(row[:5])
+            powerballs.append(row[5])
+
+        white_counts = Counter(white_balls)
+        powerball_counts = Counter(powerballs)
+
+        # Most frequent numbers
+        most_likely_white = [num for num, _ in white_counts.most_common(5)]
+        most_likely_power = powerball_counts.most_common(1)[0][0]
+
+        # Least frequent numbers
+        least_likely_white = [num for num, _ in white_counts.most_common()[:-6:-1]]
+        least_likely_power = powerball_counts.most_common()[:-2:-1][0][0]
+
+        # Random numbers
+        random_white = random.sample(range(1, 70), 5)
+        random_power = random.randint(1, 26)
+
+        self.output_text.append("=== Pick Winners ===<br>")
+
+        self.output_text.insertHtml(
+            f'<b><span style="color: green;">Most Likely:</span></b><br>'
+            f'<span style="color: green;">{most_likely_white}</span> + '
+            f'<span style="color: green;">{most_likely_power}</span><br><br>'
+        )
+
+        self.output_text.insertHtml(
+            f'<b><span style="color: orange;">Least Likely:</span></b><br>'
+            f'<span style="color: orange;">{least_likely_white}</span> + '
+            f'<span style="color: orange;">{least_likely_power}</span><br><br>'
+        )
+
+        self.output_text.insertHtml(
+            f'<b><span style="color: purple;">Random:</span></b><br>'
+            f'<span style="color: purple;">{random_white}</span> + '
+            f'<span style="color: purple;">{random_power}</span><br><br>'
+        )
 
     def closeEvent(self, event):
-        """Close database connection on app exit."""
         self.conn.close()
         event.accept()
 
