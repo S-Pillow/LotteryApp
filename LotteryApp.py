@@ -1,131 +1,156 @@
 import sys
+import sqlite3
 from PyQt6.QtWidgets import (
-    QApplication, QMainWindow, QVBoxLayout, QPushButton, QTextEdit, QWidget, QLabel
+    QApplication, QMainWindow, QVBoxLayout, QPushButton, QTextEdit, QWidget, QLabel, QCalendarWidget, QHBoxLayout, QCheckBox
 )
-from PyQt6.QtCore import QTimer
-import csv
-from collections import Counter
-import os
-import random  # Simulating lottery data for testing
+from selenium import webdriver
+from selenium.webdriver.common.by import By
+from selenium.webdriver.edge.service import Service
+from datetime import datetime
 
 
 class LotteryApp(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Lottery Analyzer")
-        self.setGeometry(100, 100, 600, 400)
+        self.setWindowTitle("Lottery Analyzer with SQLite")
+        self.setGeometry(100, 100, 800, 600)
 
         # Main widget and layout
         self.central_widget = QWidget()
         self.setCentralWidget(self.central_widget)
         self.layout = QVBoxLayout(self.central_widget)
 
-        # Buttons
+        # Buttons and Inputs
         self.fetch_button = QPushButton("Fetch Lottery Data")
-        self.analyze_button = QPushButton("Analyze Data")
-        self.save_button = QPushButton("Save Data")
-        self.layout.addWidget(self.fetch_button)
-        self.layout.addWidget(self.analyze_button)
-        self.layout.addWidget(self.save_button)
-
-        # Output Area
+        self.fetch_all_checkbox = QCheckBox("Fetch All Historical Data")
+        self.filter_button = QPushButton("Filter Results")
+        self.date_range_label = QLabel("Filter by Date Range:")
+        self.start_calendar = QCalendarWidget()
+        self.end_calendar = QCalendarWidget()
         self.output_label = QLabel("Output:")
         self.output_text = QTextEdit()
         self.output_text.setReadOnly(True)
+
+        # Layout setup
+        self.layout.addWidget(self.fetch_button)
+        self.layout.addWidget(self.fetch_all_checkbox)
+        self.layout.addWidget(self.filter_button)
+        self.layout.addWidget(self.date_range_label)
+
+        date_layout = QHBoxLayout()
+        date_layout.addWidget(QLabel("Start Date:"))
+        date_layout.addWidget(self.start_calendar)
+        date_layout.addWidget(QLabel("End Date:"))
+        date_layout.addWidget(self.end_calendar)
+        self.layout.addLayout(date_layout)
+
         self.layout.addWidget(self.output_label)
         self.layout.addWidget(self.output_text)
 
-        # Connect buttons to functions
+        # Connect buttons
         self.fetch_button.clicked.connect(self.fetch_data)
-        self.analyze_button.clicked.connect(self.analyze_data)
-        self.save_button.clicked.connect(self.save_data)
+        self.filter_button.clicked.connect(self.filter_results)
 
-        # Timer for automation (optional)
-        self.timer = QTimer()
-        self.timer.timeout.connect(self.fetch_data)  # Fetch data periodically
+        # Initialize SQLite database
+        self.init_db()
+
+    def init_db(self):
+        """Initialize SQLite database and create tables if they don't exist."""
+        self.conn = sqlite3.connect("lottery_data.db")
+        self.cursor = self.conn.cursor()
+        self.cursor.execute("""
+            CREATE TABLE IF NOT EXISTS draws (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                draw_date TEXT,
+                number_1 INTEGER,
+                number_2 INTEGER,
+                number_3 INTEGER,
+                number_4 INTEGER,
+                number_5 INTEGER,
+                powerball INTEGER
+            )
+        """)
+        self.conn.commit()
 
     def fetch_data(self):
-        """Simulates fetching lottery data."""
-        self.lottery_data = [
-            [random.randint(1, 69) for _ in range(5)] + [random.randint(1, 26)]
-            for _ in range(10)
-        ]  # Simulating 10 draws
-        self.output_text.append("Lottery data fetched successfully!")
+        """Fetch real lottery data using Selenium."""
+        url = "https://www.kylottery.com/apps/draw_games/pastwinning.html?game=12"
+        fetch_all = self.fetch_all_checkbox.isChecked()
+        self.output_text.append(f"Fetching {'all' if fetch_all else 'latest'} data...")
 
-    def analyze_data(self):
-        """Analyzes the lottery data."""
-        if not hasattr(self, "lottery_data"):
-            self.output_text.append("No data to analyze. Fetch data first.")
-            return
+        try:
+            # Set up Selenium WebDriver
+            service = Service(r"C:\Users\spill\Downloads\edgedriver_win64\msedgedriver.exe")  # Update with your path
+            driver = webdriver.Edge(service=service)
+            driver.get(url)
 
-        all_numbers = []
-        special_numbers = []
+            # Wait for the page to load
+            driver.implicitly_wait(10)
 
-        # Flatten the data for analysis
-        for draw in self.lottery_data:
-            all_numbers.extend(draw[:-1])
-            special_numbers.append(draw[-1])
+            # Fetch drawing dates and numbers
+            date_elements = driver.find_elements(By.XPATH, '//td[@title="Drawing Date"]')
+            row_elements = driver.find_elements(By.XPATH, '//td[@title="Winning Numbers" and contains(@class, "klc-pb-past-winning-display-cell")]')
 
-        # Count occurrences
-        number_counts = Counter(all_numbers)
-        special_counts = Counter(special_numbers)
-
-        # Find the least frequent numbers
-        cold_numbers = number_counts.most_common()[-5:]
-        hottest_special = special_counts.most_common(1)
-
-        # Number distribution by range
-        ranges = {f"{i}-{i + 9}": 0 for i in range(1, 70, 10)}
-        for number in all_numbers:
-            for range_key in ranges.keys():
-                low, high = map(int, range_key.split("-"))
-                if low <= number <= high:
-                    ranges[range_key] += 1
-
-        # Find consecutive numbers
-        consecutive_draws = [
-            draw for draw in self.lottery_data if self.has_consecutive_numbers(draw)
-        ]
-
-        # Display results
-        self.output_text.append("=== Analysis Results ===")
-        self.output_text.append(f"Cold Numbers: {cold_numbers}")
-        self.output_text.append(f"Hottest Powerball: {hottest_special}")
-        self.output_text.append(f"Number Distribution by Range: {ranges}")
-        self.output_text.append(
-            f"Draws with Consecutive Numbers: {len(consecutive_draws)}"
-        )
-
-    def save_data(self):
-        """Saves the lottery data to a CSV file."""
-        if not hasattr(self, "lottery_data"):
-            self.output_text.append("No data to save. Fetch data first.")
-            return
-
-        filename = "lottery_data.csv"
-        if os.path.exists(filename):
-            overwrite = input(
-                f"The file '{filename}' already exists. Overwrite? (y/n): "
-            ).strip()
-            if overwrite.lower() != "y":
-                self.output_text.append("File not saved. Operation canceled.")
+            if len(date_elements) != len(row_elements):
+                self.output_text.append("Error: Mismatch between dates and numbers.")
+                driver.quit()
                 return
 
-        with open(filename, "w", newline="") as csvfile:
-            writer = csv.writer(csvfile)
-            writer.writerow(["Number 1", "Number 2", "Number 3", "Number 4", "Number 5", "Powerball"])
-            writer.writerows(self.lottery_data)
+            fetched_count = 0
 
-        self.output_text.append("Data saved to 'lottery_data.csv'.")
+            for date_element, row_element in zip(date_elements, row_elements):
+                # Parse and standardize the draw date
+                raw_date = date_element.text.strip()
+                draw_date = datetime.strptime(raw_date, "%m/%d/%Y").strftime("%Y-%m-%d")  # Convert to YYYY-MM-DD format
 
-    @staticmethod
-    def has_consecutive_numbers(draw):
-        """Checks if a draw contains consecutive numbers."""
-        numbers = sorted(draw[:-1])  # Exclude the Powerball number
-        for i in range(len(numbers) - 1):
-            if numbers[i] + 1 == numbers[i + 1]:
-                return True
-        return False
+                # Parse the numbers
+                ball_elements = row_element.find_elements(By.CLASS_NAME, "number-ball")
+                balls = [int(ball.text.strip()) for ball in ball_elements]
+                numbers, powerball = balls[:-1], balls[-1]
+
+                # Debugging: Print parsed data
+                print(f"Date: {draw_date}, Numbers: {numbers}, Powerball: {powerball}")
+
+                # Insert into the database
+                self.cursor.execute("""
+                    INSERT INTO draws (draw_date, number_1, number_2, number_3, number_4, number_5, powerball)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                """, (draw_date, *numbers, powerball))
+                fetched_count += 1
+
+                if not fetch_all:
+                    break
+
+            self.conn.commit()
+            self.output_text.append(f"Fetched {fetched_count} draw(s) successfully!")
+            driver.quit()
+        except Exception as e:
+            self.output_text.append(f"Error fetching data: {e}")
+
+    def filter_results(self):
+        """Filters lottery data based on selected date range."""
+        start_date = self.start_calendar.selectedDate().toString("yyyy-MM-dd")
+        end_date = self.end_calendar.selectedDate().toString("yyyy-MM-dd")
+
+        query = "SELECT * FROM draws WHERE draw_date BETWEEN ? AND ?"
+        params = [start_date, end_date]
+
+        self.cursor.execute(query, params)
+        results = self.cursor.fetchall()
+
+        if results:
+            self.output_text.append(f"=== Filtered Results ({start_date} to {end_date}) ===")
+            for result in results:
+                # Format the date back to MM/DD/YYYY for display
+                formatted_date = datetime.strptime(result[1], "%Y-%m-%d").strftime("%m/%d/%Y")
+                self.output_text.append(f"Date: {formatted_date}, Numbers: {result[2:7]}, Powerball: {result[7]}")
+        else:
+            self.output_text.append("No results found for the given date range.")
+
+    def closeEvent(self, event):
+        """Close database connection on app exit."""
+        self.conn.close()
+        event.accept()
 
 
 if __name__ == "__main__":
